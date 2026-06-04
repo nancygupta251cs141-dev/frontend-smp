@@ -87,7 +87,7 @@ def create_product(product: Product):
 @app.put("/products/{id}")
 def update_product(id: int, product: ProductUpdate):
     product_to_update = find_product(id)
-    if product.name is not None:
+    if product.name is not None and product.name != "":
         product_to_update["name"] = product.name
     if product.price is not None:
         product_to_update["price"] = product.price

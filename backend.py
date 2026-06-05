@@ -1,27 +1,63 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
+from sqlalchemy import create_engine, Column, Integer, String, Float
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, Session
+
+#database
+DATABASE_URL = "postgresql://neondb_owner:npg_zT8omL4Vqrce@ep-super-cloud-aq2ape43-pooler.c-8.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(bind=engine)
+Base = declarative_base()
+
+class CategoryTable(Base):
+    __tablename__ = "categories"
+    id = Column(Integer, primary_key=True)
+    name = Column(String)
+
+class ProductTable(Base):
+    __tablename__ = "products"
+    id = Column(Integer, primary_key=True)
+    name = Column(String)
+    price = Column(Float)
+    category_id = Column(Integer)
+    stock = Column(Integer)
+
+class CartTable(Base):
+    __tablename__ = "cart"
+    id = Column(Integer, primary_key=True)
+    product_id = Column(Integer)
+    quantity = Column(Integer)
+
+class OrderTable(Base):
+    __tablename__ = "orders"
+    id = Column(Integer, primary_key=True)
+    total = Column(Float)
+    status = Column(String)
+
+class OrderItemTable(Base):
+    __tablename__ = "order_items"
+    id = Column(Integer, primary_key=True)
+    order_id = Column(Integer)
+    product_id = Column(Integer)
+    name = Column(String)
+    price = Column(Float)
+    quantity = Column(Integer)
+    subtotal = Column(Float)
+
+Base.metadata.create_all(engine)
+
+#supplying connection to endpoints
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 app = FastAPI()
-
-#stored data
-categories = [
-    {"id": 1, "name": "Electronics"},
-    {"id": 2, "name": "Clothing"},
-]
-
-products = [
-    {"id": 1, "name": "Laptop", "price": 75000.0, "category_id": 1, "stock": 10},
-    {"id": 2, "name": "T-Shirt", "price": 499.0, "category_id": 2, "stock": 50},
-    {"id": 3, "name": "Headphones", "price": 2999.0, "category_id": 1, "stock": 20},
-]
-
-orders = []
-cart= []
-
-category_id_available = 3
-product_id_available = 4
-order_id_available = 1
 
 #pydantic models
 class Product(BaseModel):
@@ -40,18 +76,17 @@ class Category(BaseModel):
     name: str
 
 #repeated functions
-def find_product(id: int):
-    product = next((p for p in products if p["id"] == id), None)
+def find_product(id: int, db: Session):
+    product = db.query(ProductTable).filter(ProductTable.id == id).first()
     if not product:
         raise HTTPException(status_code=404, detail=f"Product with id {id} not found")
     return product
 
-def find_category(id: int):
-    category = next((c for c in categories if c["id"] == id), None)
+def find_category(id: int, db: Session):
+    category = db.query(CategoryTable).filter(CategoryTable.id == id).first()
     if not category:
         raise HTTPException(status_code=404, detail=f"Category with id {id} not found")
     return category
-
 
 #main (root)
 @app.get("/")
@@ -62,137 +97,141 @@ def read_root():
 
 #products
 @app.get("/products")
-def display_products():
+def display_products(db: Session = Depends(get_db)):
+    products = db.query(ProductTable).all()
     return {"products": products}
 
 @app.get("/products/{id}")
-def display_product_by_id(id: int):
-    return {"product": find_product(id)}
+def display_product_by_id(id: int, db: Session = Depends(get_db)):
+    return {"product": find_product(id, db)}
 
 @app.post("/products")
-def create_product(product: Product):
-    global product_id_available
-    find_category(product.category_id)
-    new_product = {
-        "id": product_id_available,
-        "name": product.name,
-        "price": product.price,
-        "category_id": product.category_id,
-        "stock": product.stock
-    }
-    products.append(new_product)
-    product_id_available += 1
+def create_product(product: Product, db: Session = Depends(get_db)):
+    find_category(product.category_id, db)
+    new_product = ProductTable(
+        name=product.name,
+        price=product.price,
+        category_id=product.category_id,
+        stock=product.stock
+    )
+    db.add(new_product)
+    db.commit()
+    db.refresh(new_product)
     return {"message": "Product created"}
 
 @app.put("/products/{id}")
-def update_product(id: int, product: ProductUpdate):
-    product_to_update = find_product(id)
+def update_product(id: int, product: ProductUpdate, db: Session = Depends(get_db)):
+    product_to_update = find_product(id, db)
     if product.name is not None and product.name != "":
-        product_to_update["name"] = product.name
+        product_to_update.name = product.name
     if product.price is not None:
-        product_to_update["price"] = product.price
+        product_to_update.price = product.price
     if product.category_id is not None:
-        find_category(product.category_id)
-        product_to_update["category_id"] = product.category_id
+        find_category(product.category_id, db)
+        product_to_update.category_id = product.category_id
     if product.stock is not None:
-        product_to_update["stock"] = product.stock
+        product_to_update.stock = product.stock
+    db.commit()
     return {"message": "Product updated"}
 
 @app.delete("/products/{id}")
-def delete_product(id: int):
-    product = find_product(id)
-    products.remove(product)
+def delete_product(id: int, db: Session = Depends(get_db)):
+    product = find_product(id, db)
+    db.delete(product)
+    db.commit()
     return {"message": "Product deleted"}
 
 
 #categories
 @app.get("/categories")
-def display_categories():
+def display_categories(db: Session = Depends(get_db)):
+    categories = db.query(CategoryTable).all()
     return {"categories": categories}
 
 @app.post("/categories")
-def create_category(category: Category):
-    global category_id_available
-    new_category = {
-        "id": category_id_available,
-        "name": category.name
-    }
-    categories.append(new_category)
-    category_id_available += 1
+def create_category(category: Category, db: Session = Depends(get_db)):
+    new_category = CategoryTable(name=category.name)
+    db.add(new_category)
+    db.commit()
+    db.refresh(new_category)
     return {"message": "Category created"}
-
 
 #cart
 @app.get("/cart")
-def display_cart():
+def display_cart(db: Session = Depends(get_db)):
+    cart = db.query(CartTable).all()
     return {"cart": cart}
 
 @app.post("/cart/add/{id}")
-def add_to_cart(id: int, quantity: int):
-    product = find_product(id)
+def add_to_cart(id: int, quantity: int, db: Session = Depends(get_db)):
+    product = find_product(id, db)
     if quantity < 1:
         raise HTTPException(status_code=400, detail="Quantity must be at least 1")
-    if product["stock"] < quantity:
-        raise HTTPException(status_code=400, detail=f"Only {product['stock']} units in stock")
-    exists = next((item for item in cart if item["product_id"] == id), None)
+    if product.stock < quantity:
+        raise HTTPException(status_code=400, detail=f"Only {product.stock} units in stock")
+    exists = db.query(CartTable).filter(CartTable.product_id == id).first()
     if exists:
-        exists["quantity"] += quantity
+        exists.quantity += quantity
+        db.commit()
     else:
-        cart.append({"product_id": product["id"], "quantity": quantity})
+        new_cart_item = CartTable(product_id=id, quantity=quantity)
+        db.add(new_cart_item)
+        db.commit()
     return {"message": "Product added to cart"}
 
 @app.delete("/cart/remove/{id}")
-def remove_from_cart(id: int, quantity: int = 1):
-    product = find_product(id)
-    cart_item = next((item for item in cart if item["product_id"] == id), None)
+def remove_from_cart(id: int, db: Session = Depends(get_db)):
+    find_product(id, db)
+    cart_item = db.query(CartTable).filter(CartTable.product_id == id).first()
     if not cart_item:
-        raise HTTPException(status_code=404, detail=f"Product with id {id} not found in the cart")
-    cart.remove(cart_item)
-    product["stock"] += quantity
+        raise HTTPException(status_code=404, detail=f"Product with id {id} not found in cart")
+    db.delete(cart_item)
+    db.commit()
     return {"message": "Product removed from cart"}
 
 #orders
 @app.post("/orders")
-def create_order():
-    global order_id_available
+def create_order(db: Session = Depends(get_db)):
+    cart = db.query(CartTable).all()
     if not cart:
         raise HTTPException(status_code=400, detail="Cart is empty")
-    order_items = []
     total = 0.0
+    new_order = OrderTable(total=0.0, status="confirmed")
+    db.add(new_order)
+    db.commit()
+    db.refresh(new_order)
     for item in cart:
-        product = next((p for p in products if p["id"] == item["product_id"]), None)
-        if not product:
-            raise HTTPException(status_code=404, detail="Product not found")
-        if product["stock"] < item["quantity"]:
-            raise HTTPException(status_code=400, detail=f"Insufficient stock for '{product['name']}'")
-        subtotal = product["price"] * item["quantity"]
+        product = find_product(item.product_id, db)
+        if product.stock < item.quantity:
+            raise HTTPException(status_code=400, detail=f"Insufficient stock for '{product.name}'")
+        subtotal = product.price * item.quantity
         total += subtotal
-        order_items.append({
-            "id": product["id"],
-            "name": product["name"],
-            "price": product["price"],
-            "quantity": item["quantity"],
-            "subtotal": subtotal
-        })
-        product["stock"] -= item["quantity"]
-    new_order = {
-        "id": order_id_available,
-        "items": order_items,
-        "total": total,
-        "status": "confirmed",
-    }
-    orders.append(new_order)
-    order_id_available += 1
-    cart.clear()
+        order_item = OrderItemTable(
+            order_id=new_order.id,
+            product_id=product.id,
+            name=product.name,
+            price=product.price,
+            quantity=item.quantity,
+            subtotal=subtotal
+        )
+        db.add(order_item)
+        product.stock -= item.quantity
+    new_order.total = total
+    db.commit()
+    for item in cart:
+        db.delete(item)
+    db.commit()
     return {"message": "Order created"}
 
 @app.get("/orders")
-def display_orders():
+def display_orders(db: Session = Depends(get_db)):
+    orders = db.query(OrderTable).all()
     return {"orders": orders}
 
 @app.get("/orders/{id}")
-def display_order_by_id(id: int):
-    order = next((o for o in orders if o["id"] == id), None)
+def display_order_by_id(id: int, db: Session = Depends(get_db)):
+    order = db.query(OrderTable).filter(OrderTable.id == id).first()
     if not order:
         raise HTTPException(status_code=404, detail=f"Order with id {id} not found")
-    return {"order": order}
+    order_items = db.query(OrderItemTable).filter(OrderItemTable.order_id == id).all()
+    return {"order": order, "items": order_items}

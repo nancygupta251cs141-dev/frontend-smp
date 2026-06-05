@@ -8,7 +8,11 @@ from sqlalchemy.orm import sessionmaker, Session
 #database
 DATABASE_URL = "postgresql://neondb_owner:npg_zT8omL4Vqrce@ep-super-cloud-aq2ape43-pooler.c-8.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
 
-engine = create_engine(DATABASE_URL)
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    pool_recycle=300
+)
 SessionLocal = sessionmaker(bind=engine)
 Base = declarative_base()
 
